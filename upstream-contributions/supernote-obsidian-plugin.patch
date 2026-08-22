@@ -1,0 +1,128 @@
+diff --git a/src/render/linkOverlay.test.ts b/src/render/linkOverlay.test.ts
+index 5d5c4de..372ca44 100644
+--- a/src/render/linkOverlay.test.ts
++++ b/src/render/linkOverlay.test.ts
+@@ -20,6 +20,8 @@ function fakeLink(overrides: Partial<ILink> = {}): ILink {
+         PAGEID: '0',
+         OBJPAGE: '0',
+         text: 'target-note',
++		target: '/storage/emulated/0/Note/target-note.note',
++		isExternal: false,
+         bitmapBuffer: null,
+         ...overrides,
+     };
+@@ -166,6 +168,42 @@ describe('buildLinkOverlay', () => {
+         expect(entry.el.title).toBe('Other Note#Page 3');
+     });
+ 
++	it('uses the exact URL as the href for an external link', () => {
++		const container = document.createElement('div');
++		const url = 'https://example.com/path?case=AbC%20Def&punct=%2B%26%3D#Exact';
++		const [entry] = buildLinkOverlay(
++			[fakeLink({ LINKTYPE: '4', text: url, target: url, isExternal: true })],
++			container,
++		);
++
++		expect(entry.el.href).toBe(url);
++		expect(entry.el.target).toBe('_blank');
++		expect(entry.el.rel).toBe('noopener noreferrer');
++	});
++
++	it('keeps a real device external URL fixture clickable', () => {
++		const fixturePath = path.join(
++			import.meta.dirname,
++			'..',
++			'..',
++			'supernote-typescript',
++			'tests',
++			'input',
++			'link-n6-20260016-external-url.note',
++		);
++		const buffer = fs.readFileSync(fixturePath);
++		const sn = new SupernoteX(new Uint8Array(buffer));
++		const url = 'https://example.com/LinkBridge-Sentinel?case=AbC%20Def&punct=%2B%26%3D#Exact-Fragment';
++		const links = Object.values(sn.links).flat();
++
++		expect(links).toHaveLength(1);
++		expect(links[0]).toMatchObject({ LINKTYPE: '4', target: url, isExternal: true });
++
++		const container = document.createElement('div');
++		const [entry] = buildLinkOverlay(links, container);
++		expect(entry.el.href).toBe(url);
++	});
++
+     it('keeps the original ILink reachable from the entry, for the caller\'s own click handling', () => {
+         const container = document.createElement('div');
+         const link = fakeLink({ text: 'a' });
+diff --git a/src/render/linkOverlay.ts b/src/render/linkOverlay.ts
+index 4b21e89..8bdfa33 100644
+--- a/src/render/linkOverlay.ts
++++ b/src/render/linkOverlay.ts
+@@ -1,5 +1,5 @@
+ // Geometry/bucketing logic, plus DOM-building, for rendering Supernote
+-// internal links (ILink) as a clickable overlay - shared by SupernoteView
++// links (ILink) as a clickable overlay - shared by SupernoteView
+ // (main.ts) and <supernote-viewer> (SupernoteViewerElement.ts). Kept free of
+ // any 'obsidian' import so both the pure logic and the DOM-building below
+ // can run, and be unit tested, outside Obsidian entirely - same pattern as
+@@ -96,8 +96,14 @@ export function buildLinkOverlay(links: ILink[], container: HTMLElement): LinkOv
+ 
+ 		const el = document.createElement('a');
+ 		el.className = 'link-overlay-rect';
+-		el.href = '#';
+-		el.title = link.text;
++		el.title = link.text || link.target;
++		if (link.isExternal) {
++			el.href = link.target;
++			el.target = '_blank';
++			el.rel = 'noopener noreferrer';
++		} else {
++			el.href = '#';
++		}
+ 		container.appendChild(el);
+ 
+ 		entries.push({ link, el, nativeX: x, nativeY: y, nativeWidth: w, nativeHeight: h });
+diff --git a/src/webcomponent/SupernoteViewerElement.test.ts b/src/webcomponent/SupernoteViewerElement.test.ts
+index db532fe..c93ca10 100644
+--- a/src/webcomponent/SupernoteViewerElement.test.ts
++++ b/src/webcomponent/SupernoteViewerElement.test.ts
+@@ -1237,6 +1237,27 @@ describe('<supernote-viewer>', () => {
+             expect(clickEvent.defaultPrevented).toBe(true);
+         });
+ 
++		it('leaves a real external URL as native anchor navigation', async () => {
++			const el = createViewer();
++			document.body.appendChild(el);
++			const loaded = waitForEvent(el, 'supernote-load');
++			el.noteData = readFixture('link-n6-20260016-external-url.note');
++			await loaded;
++
++			const rect = el.shadowRoot!.querySelector<HTMLAnchorElement>('.link-overlay-rect');
++			expect(rect).not.toBeNull();
++			expect(rect!.href).toBe('https://example.com/LinkBridge-Sentinel?case=AbC%20Def&punct=%2B%26%3D#Exact-Fragment');
++			expect(rect!.target).toBe('_blank');
++
++			let dispatched = false;
++			el.addEventListener('link-click', () => { dispatched = true; });
++			const clickEvent = new MouseEvent('click', { bubbles: true, cancelable: true });
++			rect!.dispatchEvent(clickEvent);
++
++			expect(clickEvent.defaultPrevented).toBe(false);
++			expect(dispatched).toBe(false);
++		});
++
+         it('repositions link rects to the page\'s rendered size via the shared ResizeObserver', async () => {
+             // happy-dom's ResizeObserver never actually fires (no real
+             // layout engine), so it's stubbed here to synchronously hand
+diff --git a/src/webcomponent/SupernoteViewerElement.ts b/src/webcomponent/SupernoteViewerElement.ts
+index 0956838..e1a2f0d 100644
+--- a/src/webcomponent/SupernoteViewerElement.ts
++++ b/src/webcomponent/SupernoteViewerElement.ts
+@@ -1267,6 +1267,7 @@ export class SupernoteViewerElement extends HTMLElement {
+ 
+             const linkEntries = buildLinkOverlay(linksByPage.get(page.pageNumber - 1) ?? [], page.containerEl);
+             for (const entry of linkEntries) {
++				if (entry.link.isExternal) continue;
+                 entry.el.addEventListener('click', (evt) => {
+                     evt.preventDefault();
+                     this.handleLinkClick(entry.link);

@@ -1,0 +1,40 @@
+# Local secrets and signing material
+*.jks
+*.keystore
+*.p12
+*.pem
+.env
+.env.*
+**/local.properties
+
+# Dependencies and generated build output
+**/node_modules/
+**/.gradle/
+**/.cxx/
+**/build/
+apps/obsidian/main.js
+apps/obsidian/supernote-typescript/lib/
+
+# Local Codex/project state and upstream working copies
+.agents/
+.codex/
+apps/obsidian/
+tools/device-apks/
+apps/supernote/ios/
+apps/supernote/Gemfile
+Supernote-LinkBridge-Project-Spec-v2.md
+
+# Device captures and private recovery material
+reports/
+backups/
+*.log
+linkbridge-probe.png
+nomad-screen.png
+fixtures/supernote/*.note
+!fixtures/supernote/linkbridge-url-sentinel.note
+
+# Publish these as release assets instead of repository blobs
+releases/**/*.apk
+releases/**/*.snplg
+releases/**/*.zip
+releases/**/plugin/main.js

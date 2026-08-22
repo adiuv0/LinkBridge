@@ -1,0 +1,55 @@
+plugins {
+    id "com.android.application"
+}
+
+def releaseSigningValues = [
+    keystorePath: providers.environmentVariable("LINKBRIDGE_KEYSTORE_PATH").orNull,
+    storePassword: providers.environmentVariable("LINKBRIDGE_KEYSTORE_PASSWORD").orNull,
+    keyAlias: providers.environmentVariable("LINKBRIDGE_KEY_ALIAS").orNull,
+    keyPassword: providers.environmentVariable("LINKBRIDGE_KEY_PASSWORD").orNull,
+]
+def providedReleaseSigningValues = releaseSigningValues.values().count { value ->
+    value != null && !value.trim().isEmpty()
+}
+if (providedReleaseSigningValues > 0 && providedReleaseSigningValues < releaseSigningValues.size()) {
+    throw new GradleException("Set all four LINKBRIDGE release-signing environment variables, or none of them.")
+}
+def hasReleaseSigning = providedReleaseSigningValues == releaseSigningValues.size()
+
+android {
+    namespace "com.emilianozazueta.linkbridge"
+    compileSdk 35
+
+    defaultConfig {
+        applicationId "com.emilianozazueta.linkbridge"
+        minSdk 26
+        targetSdk 35
+        versionCode 4
+        versionName "0.5.0"
+    }
+
+    signingConfigs {
+        release {
+            if (hasReleaseSigning) {
+                storeFile file(releaseSigningValues.keystorePath)
+                storePassword releaseSigningValues.storePassword
+                keyAlias releaseSigningValues.keyAlias
+                keyPassword releaseSigningValues.keyPassword
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            if (hasReleaseSigning) {
+                signingConfig signingConfigs.release
+            }
+        }
+    }
+}
+
+dependencies {
+    testImplementation "junit:junit:4.13.2"
+    testImplementation "org.json:json:20240303"
+}
