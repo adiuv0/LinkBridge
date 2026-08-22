@@ -1,12 +1,15 @@
 # LinkBridge
 
+[![GitHub release](https://img.shields.io/github/v/release/adiuv0/LinkBridge?include_prereleases&label=release)](https://github.com/adiuv0/LinkBridge/releases)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 LinkBridge sends a web URL directly from an Android phone to the open page of a Supernote note over Bluetooth Low Energy. The phone may use cellular data and the Supernote does not need Wi-Fi or an internet connection.
 
 The received URL is saved as a native external link inside the `.note` file. When the Supernote Partner app later transfers that file to the computer, the patched Supernote Obsidian plugin renders the URL as a clickable web link.
 
 ## Current status
 
-This repository contains a physically tested public beta candidate for the Supernote Nomad and Android:
+This repository contains a physically tested public beta for the Supernote Nomad and Android:
 
 - Android share target and one-shot BLE URL sender
 - durable phone outbox that survives app and Bluetooth interruptions
@@ -34,7 +37,7 @@ The phone removes an item from its outbox only after the Supernote confirms that
 
 ## Installation
 
-Follow [docs/INSTALL.md](docs/INSTALL.md) for the phone, Supernote, and temporary Obsidian compatibility steps.
+Download the three files attached to the [0.5.0 public-beta release](https://github.com/adiuv0/LinkBridge/releases/tag/v0.5.0), then follow [docs/INSTALL.md](docs/INSTALL.md) for the phone, Supernote, and temporary Obsidian compatibility steps.
 
 Do not distribute an Android debug APK. Public phone builds must be created with `apps/phone/Build-SignedRelease.ps1` and a long-lived release-signing key. The compatibility installer backs up the user's existing Obsidian plugin and includes a restore tool.
 
@@ -51,7 +54,7 @@ Before a stable 1.0, add application-level pairing/authentication, encrypted ses
 
 ## Verification
 
-The workspace includes physical fixtures and screenshots under `fixtures/supernote` and `reports/physical-probe`. The Obsidian parser and overlay tests cover exact external URL decoding and click behavior.
+The repository includes a real Nomad fixture under `fixtures/supernote`. Parser and overlay regression tests cover exact external URL decoding and click behavior; the documented release pairing was also installed and round-trip tested on physical hardware.
 
 To rebuild the Supernote package from `apps/supernote`:
 
@@ -69,6 +72,12 @@ Initialize the permanent signing identity once (it is stored outside this reposi
 ```
 
 Back up the recovery credentials created by the initialization script in a separate password manager or encrypted store. Never commit the keystore or recovery files.
+
+## Contributing and security
+
+Bug reports and focused improvements are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request. Please use test URLs and remove private note names, device addresses, and account information from diagnostics.
+
+Do not open a public issue for a suspected security vulnerability. Follow [SECURITY.md](SECURITY.md) to report it privately through GitHub.
 
 ## License
 

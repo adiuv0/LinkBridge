@@ -1,8 +1,8 @@
-# LinkBridge 0.5.0 public-beta candidate
+# LinkBridge 0.5.0 public beta
 
-This candidate contains the physically tested Bluetooth-only workflow and a permanently signed Android phone APK.
+This first public beta contains the physically tested Bluetooth-only workflow and a permanently signed Android phone APK.
 
-## Ready
+## Highlights
 
 - Supernote plugin package rebuilt without internet permission or sensitive SDK parameter logging.
 - Version-pinned Obsidian 3.1.2 compatibility bundle with automatic backup and restore tools.
@@ -13,10 +13,15 @@ This candidate contains the physically tested Bluetooth-only workflow and a perm
 - Android APK signed with the permanent LinkBridge release identity and verified with Android `apksigner`.
 - SHA-256 checksums included for all three distributable release assets.
 
-## Before posting
+## Downloads
 
-- Store the signing recovery credentials in a separate password manager or encrypted backup.
-- Create the public repository and enable GitHub private vulnerability reporting.
-- Review the final Reddit copy and release assets before making them public.
+- `LinkBridgePhone-0.5.0.apk` — Android share target and BLE sender.
+- `LinkBridgeSupernote-0.5.0.snplg` — Supernote plugin-preview package.
+- `LinkBridge-Obsidian-Compatibility-3.1.2.zip` — temporary patched Obsidian plugin with backup and restore tools.
+- `CHECKSUMS-SHA256.txt` — SHA-256 hashes for all three assets.
 
-The Supernote plugin-preview firmware requirement and unauthenticated-Bluetooth beta limitation must be included in any public post.
+Read the [installation guide](https://github.com/adiuv0/LinkBridge/blob/main/docs/INSTALL.md) before installing. The Supernote plugin-preview firmware is required.
+
+## Important beta limitation
+
+LinkBridge 0.5.0 does not yet authenticate the nearby phone at the application layer. Do not use this beta for sensitive or credential-bearing URLs in a hostile radio environment. See the [privacy and security notes](https://github.com/adiuv0/LinkBridge/blob/main/docs/PRIVACY-AND-SECURITY.md) for the full threat model.

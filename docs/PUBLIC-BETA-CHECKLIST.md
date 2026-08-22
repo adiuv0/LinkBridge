@@ -4,7 +4,7 @@
 
 - [x] Select `adiuv0/LinkBridge` as the repository target and the MIT License.
 - [x] Generate one long-lived Android release-signing keystore outside the repository.
-- [ ] Store its plaintext recovery credentials in a separate password manager or encrypted backup.
+- [x] Store its plaintext recovery credentials in a separate password manager or encrypted backup.
 - [x] Build the phone APK with `apps/phone/Build-SignedRelease.ps1`; never distribute the debug APK.
 - [x] Build the `.snplg` from a clean dependency install and confirm sensitive SDK parameter logging is absent from the bundle.
 - [x] Re-run the dated dependency audit in `docs/DEPENDENCY-SECURITY.md`; the remaining no-fix `image-size` build-time exception is documented there.

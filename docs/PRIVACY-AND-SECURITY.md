@@ -18,4 +18,4 @@ Do not use the current beta for secret, credential-bearing, medical, legal, or o
 
 ## Responsible reporting
 
-Until a public repository issue tracker is selected, report suspected security problems privately to the project owner rather than posting exploit details publicly.
+Report suspected security problems through the repository's private vulnerability-reporting flow described in [SECURITY.md](../SECURITY.md). Do not post exploit details in a public issue.

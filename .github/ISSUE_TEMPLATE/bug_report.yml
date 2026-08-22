@@ -1,0 +1,60 @@
+name: Bug report
+description: Report a reproducible LinkBridge problem
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a problem. Use a harmless test URL and remove private note names, device addresses, and account information. Security vulnerabilities must be reported privately through the Security tab.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened?
+      description: Describe the expected result and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+      placeholder: |
+        1. Share a test URL to LinkBridge
+        2. Open a note on the Supernote
+        3. Open Plugins → LinkBridge
+    validations:
+      required: true
+  - type: input
+    id: phone
+    attributes:
+      label: Phone and Android version
+      placeholder: Pixel model, Android version
+    validations:
+      required: true
+  - type: input
+    id: supernote
+    attributes:
+      label: Supernote model and firmware
+      placeholder: Nomad, Chauvet build identifier
+    validations:
+      required: true
+  - type: input
+    id: versions
+    attributes:
+      label: LinkBridge and Obsidian plugin versions
+      placeholder: LinkBridge 0.5.0, compatibility bundle 3.1.2
+    validations:
+      required: true
+  - type: textarea
+    id: details
+    attributes:
+      label: Additional details
+      description: Add sanitized screenshots or logs only if they materially help.
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy check
+      options:
+        - label: I removed private URLs, note names, device addresses, and account information.
+          required: true
