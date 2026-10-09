@@ -29,7 +29,7 @@ import {
   normalizeLinkBridgeItem,
   type LinkBridgeItem,
 } from './protocol';
-import {deliverLink, LinkDeliveryError} from './delivery';
+import {deliverLink, drainQueue, LinkDeliveryError} from './delivery';
 
 const LINKBRIDGE_SERVICE_UUID = '7e57a001-6e88-4a5c-9f8b-7f9b46351a10';
 const LINKBRIDGE_URL_UUID = '7e57a002-6e88-4a5c-9f8b-7f9b46351a10';
@@ -53,6 +53,7 @@ type ProbeModule = {
     deviceAddress?: string;
     rssi: number;
     mtu: number;
+    remaining?: number;
     durationMs: number;
   }>;
   hasReceipt(itemId: string): Promise<boolean>;
@@ -61,7 +62,19 @@ type ProbeModule = {
   cancelReceive(): Promise<boolean>;
 };
 
-const LinkBridgeProbe = NativeModules.LinkBridgeProbe as ProbeModule | undefined;
+const LinkBridgeProbe = NativeModules.LinkBridgeProbe as
+  | ProbeModule
+  | undefined;
+
+// After a save, the phone stops advertising the finished link and starts the
+// next one. Give it a moment so the scan finds the new item.
+const NEXT_ITEM_DELAY_MS = 600;
+const NEXT_ITEM_TIMEOUT_MS = 10000;
+const MAX_ITEMS_PER_OPEN = 25;
+
+function delay(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
 
 function formatError(error: unknown): string {
   if (error instanceof Error) {
@@ -247,8 +260,7 @@ function getStaticElementBounds(
   }
 
   const geometryPoints = (element.geometry?.points ?? []).filter(
-    (point): point is Point =>
-      finiteNumber(point.x) && finiteNumber(point.y),
+    (point): point is Point => finiteNumber(point.x) && finiteNumber(point.y),
   );
   if (geometryPoints.length > 0) {
     return boundsFromPoints(geometryPoints);
@@ -478,31 +490,55 @@ function App(): React.JSX.Element {
     setResultTitle('Receiving…');
     setReceiveStatus('Receiving link…');
     let sessionOpen = false;
+    const progress = {delivered: 0, inserted: 0};
     try {
-      const received = await LinkBridgeProbe.receiveItem(
-        LINKBRIDGE_SERVICE_UUID,
-        LINKBRIDGE_URL_UUID,
-        LINKBRIDGE_METADATA_UUID,
-        LINKBRIDGE_ACK_UUID,
-        15000,
-      );
-      sessionOpen = true;
-      const item = normalizeLinkBridgeItem(received);
-      const delivery = await deliverLink(item, {
-        hasReceipt: itemId => LinkBridgeProbe.hasReceipt(itemId),
-        insert: async linkItem => {
-          await insertItem(linkItem);
+      await drainQueue(
+        async (index, remaining) => {
+          if (index > 0) {
+            setReceiveStatus(
+              `Saved ${index}. Receiving the next link (${remaining} waiting)…`,
+            );
+            await delay(NEXT_ITEM_DELAY_MS);
+          }
+          const received = await LinkBridgeProbe.receiveItem(
+            LINKBRIDGE_SERVICE_UUID,
+            LINKBRIDGE_URL_UUID,
+            LINKBRIDGE_METADATA_UUID,
+            LINKBRIDGE_ACK_UUID,
+            index === 0 ? 15000 : NEXT_ITEM_TIMEOUT_MS,
+          );
+          sessionOpen = true;
+          const item = normalizeLinkBridgeItem(received);
+          const delivery = await deliverLink(item, {
+            hasReceipt: itemId => LinkBridgeProbe.hasReceipt(itemId),
+            insert: async linkItem => {
+              await insertItem(linkItem);
+            },
+            recordReceipt: itemId => LinkBridgeProbe.recordReceipt(itemId),
+            acknowledge: itemId => LinkBridgeProbe.acknowledgeItem(itemId),
+          });
+          sessionOpen = false;
+          return {
+            inserted: delivery.inserted,
+            remaining: received.remaining ?? 0,
+          };
         },
-        recordReceipt: itemId => LinkBridgeProbe.recordReceipt(itemId),
-        acknowledge: itemId => LinkBridgeProbe.acknowledgeItem(itemId),
-      });
-      sessionOpen = false;
-      setResultTitle('Saved');
-      setReceiveStatus(
-        delivery.inserted
-          ? 'Link added, saved, and selected.'
-          : 'This retry was already saved. The phone outbox is now clear.',
+        MAX_ITEMS_PER_OPEN,
+        progress,
       );
+      const deliveredCount = progress.delivered;
+      const insertedCount = progress.inserted;
+
+      setResultTitle('Saved');
+      if (deliveredCount > 1) {
+        setReceiveStatus(`${insertedCount} links added and saved.`);
+      } else {
+        setReceiveStatus(
+          insertedCount === 1
+            ? 'Link added, saved, and selected.'
+            : 'This retry was already saved. The phone outbox is now clear.',
+        );
+      }
       const closed = await PluginManager.closePluginView();
       if (!closed) {
         setReceiveStatus('Link saved. Close this panel to continue.');
@@ -522,6 +558,17 @@ function App(): React.JSX.Element {
             error,
           )}`,
         );
+      } else if (progress.delivered > 0) {
+        setResultTitle(
+          progress.delivered === 1
+            ? '1 link saved'
+            : `${progress.delivered} links saved`,
+        );
+        setReceiveStatus(
+          `The next waiting link was not received. Tap Retry or reopen LinkBridge to continue. ${formatError(
+            error,
+          )}`,
+        );
       } else {
         setResultTitle('Could not add the link');
         setReceiveStatus(formatError(error));
@@ -529,6 +576,22 @@ function App(): React.JSX.Element {
     } finally {
       setBusy(false);
     }
+  }, []);
+
+  const closeView = useCallback(async () => {
+    try {
+      await LinkBridgeProbe?.cancelReceive();
+    } catch {
+      // Closing must still work if Bluetooth cleanup fails.
+    }
+    await PluginManager.closePluginView();
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      // Stop scanning when the view goes away so nothing keeps running unseen.
+      LinkBridgeProbe?.cancelReceive().catch(() => undefined);
+    };
   }, []);
 
   useEffect(() => {
@@ -549,7 +612,7 @@ function App(): React.JSX.Element {
         <Pressable
           accessibilityRole="button"
           style={styles.closeButton}
-          onPress={() => PluginManager.closePluginView()}>
+          onPress={closeView}>
           <Text style={styles.closeText}>Close</Text>
         </Pressable>
       </View>

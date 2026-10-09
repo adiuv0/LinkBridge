@@ -67,7 +67,7 @@ try {
     }
 
     $projectRoot = $PSScriptRoot
-    $gradle = Join-Path $projectRoot '..\supernote\android\gradlew.bat'
+    $gradle = Join-Path $projectRoot 'gradlew.bat'
     if (-not (Test-Path -LiteralPath $gradle -PathType Leaf)) {
         throw 'The bundled Gradle wrapper was not found.'
     }

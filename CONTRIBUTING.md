@@ -14,7 +14,7 @@ Thanks for helping improve LinkBridge. Focused bug fixes, device-compatibility r
 For the Android phone app, run the release unit suite through the bundled Gradle wrapper:
 
 ```powershell
-.\apps\supernote\android\gradlew.bat -p .\apps\phone :app:testReleaseUnitTest
+.\apps\phone\gradlew.bat -p .\apps\phone :app:testReleaseUnitTest
 ```
 
 For the Supernote plugin:

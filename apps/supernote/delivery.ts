@@ -48,3 +48,33 @@ export async function deliverLink(
     throw new LinkDeliveryError(message, linkSaved, error);
   }
 }
+
+export type DrainProgress = {
+  delivered: number;
+  inserted: number;
+};
+
+/**
+ * Receives and delivers links until the phone reports none remaining or the
+ * per-open limit is reached. `receiveAndDeliver` handles one link and returns
+ * whether it was newly inserted and how many links the phone still holds.
+ */
+export async function drainQueue(
+  receiveAndDeliver: (
+    index: number,
+    remaining: number,
+  ) => Promise<{inserted: boolean; remaining: number}>,
+  maxItems: number,
+  progress: DrainProgress = {delivered: 0, inserted: 0},
+): Promise<DrainProgress> {
+  let remaining = 0;
+  do {
+    const result = await receiveAndDeliver(progress.delivered, remaining);
+    progress.delivered += 1;
+    if (result.inserted) {
+      progress.inserted += 1;
+    }
+    remaining = Math.max(0, Math.floor(result.remaining));
+  } while (remaining > 0 && progress.delivered < maxItems);
+  return progress;
+}

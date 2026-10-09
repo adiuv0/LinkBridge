@@ -4,8 +4,8 @@
     "iconPath":  "",
     "desc":  "Reliable offline phone-to-Supernote web link transfer",
     "name":  "LinkBridgeSupernote",
-    "versionCode":  "12",
-    "versionName":  "0.5.0",
+    "versionCode":  "13",
+    "versionName":  "0.5.1",
     "jsMainPath":  "index",
     "nativeCodePackage":  "/app.npk",
     "reactPackages":  [

@@ -1,4 +1,4 @@
-import {deliverLink, LinkDeliveryError} from './delivery';
+import {deliverLink, drainQueue, LinkDeliveryError} from './delivery';
 import type {LinkBridgeItem} from './protocol';
 
 const item: LinkBridgeItem = {
@@ -93,7 +93,61 @@ describe('save-confirmed delivery', () => {
       expect((error as LinkDeliveryError).linkSaved).toBe(true);
     }
     dependencies.acknowledge.mockResolvedValueOnce(true);
-    await expect(deliverLink(item, dependencies)).resolves.toEqual({inserted: false});
+    await expect(deliverLink(item, dependencies)).resolves.toEqual({
+      inserted: false,
+    });
     expect(insert).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('queue draining', () => {
+  it('keeps receiving while the phone reports more links', async () => {
+    const remainingAfter = [2, 1, 0];
+    const seen: Array<[number, number]> = [];
+    const result = await drainQueue(async (index, remaining) => {
+      seen.push([index, remaining]);
+      return {inserted: index !== 1, remaining: remainingAfter[index]};
+    }, 25);
+
+    expect(result).toEqual({delivered: 3, inserted: 2});
+    expect(seen).toEqual([
+      [0, 0],
+      [1, 2],
+      [2, 1],
+    ]);
+  });
+
+  it('receives once when the phone does not report a queue', async () => {
+    const receive = jest.fn(async () => ({inserted: true, remaining: 0}));
+    await expect(drainQueue(receive, 25)).resolves.toEqual({
+      delivered: 1,
+      inserted: 1,
+    });
+    expect(receive).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops at the per-open limit', async () => {
+    const receive = jest.fn(async () => ({inserted: true, remaining: 50}));
+    await expect(drainQueue(receive, 3)).resolves.toEqual({
+      delivered: 3,
+      inserted: 3,
+    });
+  });
+
+  it('keeps the count of saved links when a later link fails', async () => {
+    const progress = {delivered: 0, inserted: 0};
+    await expect(
+      drainQueue(
+        async index => {
+          if (index === 1) {
+            throw new Error('timeout');
+          }
+          return {inserted: true, remaining: 1};
+        },
+        25,
+        progress,
+      ),
+    ).rejects.toThrow('timeout');
+    expect(progress).toEqual({delivered: 1, inserted: 1});
   });
 });

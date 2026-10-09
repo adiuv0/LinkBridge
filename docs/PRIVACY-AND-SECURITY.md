@@ -14,6 +14,8 @@ Release packaging removes an upstream Supernote SDK debug statement that would o
 
 LinkBridge 0.5.0 does not yet authenticate the nearby phone at the application layer. The service is advertised only while a link is waiting, and the Supernote scans only while its LinkBridge action is open, which keeps the exposure window short. Nevertheless, a sufficiently close device could theoretically impersonate one side, inject a link, or observe an unprotected Bluetooth session.
 
+Since 0.5.1 the phone accepts a save confirmation only from the device that read the link's URL, so a second nearby device can no longer make the phone delete a link it never delivered. This narrows the risk but is not authentication: a device that impersonates the Supernote end to end can still read and confirm a link.
+
 Do not use the current beta for secret, credential-bearing, medical, legal, or otherwise sensitive URLs in a hostile radio environment. Authenticated pairing and encrypted sessions are required before calling LinkBridge a stable public release.
 
 ## Responsible reporting

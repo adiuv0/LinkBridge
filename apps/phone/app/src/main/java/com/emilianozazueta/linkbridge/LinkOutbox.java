@@ -7,22 +7,43 @@ import org.json.JSONArray;
 import org.json.JSONException;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 
 final class LinkOutbox {
     private static final String PREFS_NAME = "linkbridge_outbox";
     private static final String ITEMS_KEY = "items";
-    private static final int MAX_ITEMS = 100;
+    static final int MAX_ITEMS = 100;
 
-    private final SharedPreferences preferences;
+    /** Where the serialized outbox lives; SharedPreferences on a device. */
+    interface Store {
+        String read();
+
+        boolean write(String encoded);
+    }
+
+    private final Store store;
 
     LinkOutbox(Context context) {
-        preferences = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+        SharedPreferences preferences = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+        store = new Store() {
+            @Override
+            public String read() {
+                return preferences.getString(ITEMS_KEY, "[]");
+            }
+
+            @Override
+            public boolean write(String encoded) {
+                return preferences.edit().putString(ITEMS_KEY, encoded).commit();
+            }
+        };
+    }
+
+    LinkOutbox(Store store) {
+        this.store = store;
     }
 
     synchronized List<LinkItem> all() {
-        return deserialize(preferences.getString(ITEMS_KEY, "[]"));
+        return deserialize(store.read());
     }
 
     synchronized LinkItem latest() {
@@ -34,14 +55,30 @@ final class LinkOutbox {
         return all().size();
     }
 
+    synchronized boolean isFull() {
+        return count() >= MAX_ITEMS;
+    }
+
+    /**
+     * Adds an item, or returns false without changing the outbox when it could
+     * not be saved or the outbox is full. Queued links are never dropped
+     * silently to make room.
+     */
     synchronized boolean enqueue(LinkItem item) {
         List<LinkItem> items = all();
         items.removeIf(existing -> existing.id.equals(item.id));
-        items.add(item);
-        if (items.size() > MAX_ITEMS) {
-            items = new ArrayList<>(items.subList(items.size() - MAX_ITEMS, items.size()));
+        if (items.size() >= MAX_ITEMS) {
+            return false;
         }
+        items.add(item);
         return save(items);
+    }
+
+    synchronized LinkItem find(String id) {
+        for (LinkItem item : all()) {
+            if (item.id.equals(id)) return item;
+        }
+        return null;
     }
 
     synchronized boolean remove(String id) {
@@ -51,7 +88,7 @@ final class LinkOutbox {
     }
 
     private boolean save(List<LinkItem> items) {
-        return preferences.edit().putString(ITEMS_KEY, serialize(items)).commit();
+        return store.write(serialize(items));
     }
 
     static String serialize(List<LinkItem> items) {
@@ -66,7 +103,7 @@ final class LinkOutbox {
     }
 
     static List<LinkItem> deserialize(String encoded) {
-        if (encoded == null || encoded.trim().isEmpty()) return Collections.emptyList();
+        if (encoded == null || encoded.trim().isEmpty()) return new ArrayList<>();
         List<LinkItem> items = new ArrayList<>();
         try {
             JSONArray json = new JSONArray(encoded);
