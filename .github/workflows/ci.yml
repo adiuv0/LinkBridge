@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  supernote:
+    name: Supernote plugin
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/supernote
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/supernote/package-lock.json
+      - run: npm ci
+      - run: npm test -- --runInBand
+      - run: npm run lint
+      - run: npx tsc --noEmit
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - name: Compile native Bluetooth module
+        working-directory: apps/supernote/android
+        run: ./gradlew --no-daemon :app:compileDebugKotlin
+
+  phone:
+    name: Android phone app
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/phone
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - name: Unit tests and debug build
+        run: ./gradlew --no-daemon :app:testReleaseUnitTest :app:assembleDebug

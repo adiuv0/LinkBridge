@@ -38,6 +38,7 @@ import java.util.regex.Pattern;
 
 public final class MainActivity extends Activity {
     private static final int PERMISSION_REQUEST = 701;
+    private static final String STATE_ACTIVE_ITEM_ID = "activeItemId";
     private static final Pattern HTTP_URL = Pattern.compile("https?://\\S+");
 
     public static final UUID SERVICE_UUID = UUID.fromString("7e57a001-6e88-4a5c-9f8b-7f9b46351a10");
@@ -53,7 +54,11 @@ public final class MainActivity extends Activity {
     private BluetoothGattServer gattServer;
     private BluetoothLeAdvertiser advertiser;
     private LinkOutbox outbox;
-    private LinkItem activeItem;
+    private volatile LinkItem activeItem;
+    // The Supernote that read the active URL. Only it may confirm the save.
+    private volatile String servedDeviceAddress;
+    // Metadata is fixed per send so every part of a long Bluetooth read matches.
+    private volatile byte[] activeMetadata;
     private LinkItem pendingPermissionItem;
     private boolean advertising;
 
@@ -65,7 +70,30 @@ public final class MainActivity extends Activity {
         BluetoothManager manager = getSystemService(BluetoothManager.class);
         adapter = manager == null ? null : manager.getAdapter();
         showLatestItem();
-        handleIntent(getIntent());
+
+        // A share intent is handled once. Activity recreation (for example after
+        // a configuration change) and relaunching from Recents replay the
+        // original intent, which would otherwise queue the same link again under
+        // a new ID that the Supernote's duplicate check cannot recognize.
+        boolean launchedFromHistory =
+            (getIntent().getFlags() & Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) != 0;
+        if (state == null && !launchedFromHistory) {
+            handleIntent(getIntent());
+        } else if (state != null) {
+            String activeId = state.getString(STATE_ACTIVE_ITEM_ID);
+            LinkItem resumed = activeId == null ? null : outbox.find(activeId);
+            if (resumed != null) {
+                showItem(resumed);
+                startSending(resumed);
+            }
+        }
+    }
+
+    @Override
+    protected void onSaveInstanceState(Bundle state) {
+        super.onSaveInstanceState(state);
+        LinkItem item = activeItem;
+        if (item != null) state.putString(STATE_ACTIVE_ITEM_ID, item.id);
     }
 
     @Override
@@ -119,7 +147,7 @@ public final class MainActivity extends Activity {
 
         Button discard = new Button(this);
         discard.setText("Discard this link");
-        discard.setOnClickListener(v -> discardLatest());
+        discard.setOnClickListener(v -> discardShown());
         content.addView(discard, new LinearLayout.LayoutParams(-1, -2));
 
         status = new TextView(this);
@@ -161,6 +189,11 @@ public final class MainActivity extends Activity {
         }
 
         LinkItem item = LinkItem.create(url, title);
+        if (outbox.isFull()) {
+            urlInput.setText(url);
+            status.setText(outboxFullMessage());
+            return;
+        }
         if (!outbox.enqueue(item)) {
             status.setText("Could not save this link to the phone outbox.");
             return;
@@ -196,6 +229,10 @@ public final class MainActivity extends Activity {
             ? latest
             : LinkItem.create(url, cleanedTitle);
         if (latest == null || !latest.id.equals(item.id)) {
+            if (outbox.isFull()) {
+                status.setText(outboxFullMessage());
+                return;
+            }
             if (!outbox.enqueue(item)) {
                 status.setText("Could not save this link to the phone outbox.");
                 return;
@@ -203,6 +240,11 @@ public final class MainActivity extends Activity {
         }
         updateOutboxStatus();
         startSending(item);
+    }
+
+    private static String outboxFullMessage() {
+        return "The outbox is full (" + LinkOutbox.MAX_ITEMS +
+            " links). Send or discard waiting links first.";
     }
 
     private boolean hasBluetoothPermission() {
@@ -229,8 +271,19 @@ public final class MainActivity extends Activity {
             return;
         }
 
+        byte[] metadata;
+        try {
+            metadata = item.metadataJson(Math.max(0, outbox.count() - 1))
+                .getBytes(StandardCharsets.UTF_8);
+        } catch (Exception error) {
+            status.setText("Could not prepare this link for sending. It remains in the outbox.");
+            return;
+        }
+
         stopBluetoothTransport();
         activeItem = item;
+        activeMetadata = metadata;
+        servedDeviceAddress = null;
         BluetoothManager manager = getSystemService(BluetoothManager.class);
         gattServer = manager.openGattServer(this, gattCallback);
         if (gattServer == null) {
@@ -315,28 +368,39 @@ public final class MainActivity extends Activity {
             int requestId,
             int offset,
             BluetoothGattCharacteristic characteristic) {
+            BluetoothGattServer server = gattServer;
+            if (server == null) return;
             LinkItem item = activeItem;
-            if (item == null || gattServer == null) return;
+            if (item == null) {
+                // Always answer, so the Supernote fails fast instead of waiting
+                // for its Bluetooth timeout.
+                server.sendResponse(device, requestId, BluetoothGatt.GATT_FAILURE, offset, null);
+                return;
+            }
             byte[] value;
+            boolean urlRead = false;
             try {
                 if (URL_UUID.equals(characteristic.getUuid())) {
                     value = item.url.getBytes(StandardCharsets.UTF_8);
+                    urlRead = true;
                 } else if (METADATA_UUID.equals(characteristic.getUuid())) {
-                    value = item.metadataJson().getBytes(StandardCharsets.UTF_8);
+                    value = activeMetadata;
+                    if (value == null) throw new IllegalStateException("No active metadata");
                 } else {
-                    gattServer.sendResponse(
+                    server.sendResponse(
                         device, requestId, BluetoothGatt.GATT_REQUEST_NOT_SUPPORTED, offset, null);
                     return;
                 }
             } catch (Exception error) {
-                gattServer.sendResponse(device, requestId, BluetoothGatt.GATT_FAILURE, offset, null);
+                server.sendResponse(device, requestId, BluetoothGatt.GATT_FAILURE, offset, null);
                 return;
             }
             if (offset < 0 || offset > value.length) {
-                gattServer.sendResponse(device, requestId, BluetoothGatt.GATT_INVALID_OFFSET, offset, null);
+                server.sendResponse(device, requestId, BluetoothGatt.GATT_INVALID_OFFSET, offset, null);
                 return;
             }
-            gattServer.sendResponse(
+            if (urlRead) servedDeviceAddress = device.getAddress();
+            server.sendResponse(
                 device,
                 requestId,
                 BluetoothGatt.GATT_SUCCESS,
@@ -357,7 +421,10 @@ public final class MainActivity extends Activity {
             int result = BluetoothGatt.GATT_FAILURE;
             String acknowledgedId = null;
             LinkItem item = activeItem;
-            if (item != null && ACK_UUID.equals(characteristic.getUuid()) && !preparedWrite && offset == 0) {
+            boolean fromServedDevice = device.getAddress() != null &&
+                device.getAddress().equals(servedDeviceAddress);
+            if (item != null && ACK_UUID.equals(characteristic.getUuid()) && !preparedWrite && offset == 0 &&
+                fromServedDevice) {
                 try {
                     JSONObject ack = new JSONObject(new String(value, StandardCharsets.UTF_8));
                     boolean valid = ack.optInt("v", 0) == LinkItem.PROTOCOL_VERSION &&
@@ -377,33 +444,44 @@ public final class MainActivity extends Activity {
                 gattServer.sendResponse(device, requestId, result, offset, null);
             }
             if (result == BluetoothGatt.GATT_SUCCESS && acknowledgedId != null) {
-                runOnUiThread(() -> status.postDelayed(() -> finishAcknowledgedItem(), 250));
+                String finishedId = acknowledgedId;
+                runOnUiThread(() -> {
+                    // Stop advertising at once so the Supernote cannot reconnect
+                    // to this finished item while it looks for the next one.
+                    stopAdvertising();
+                    status.postDelayed(() -> finishAcknowledgedItem(finishedId), 250);
+                });
             }
         }
     };
 
-    private void finishAcknowledgedItem() {
+    private void finishAcknowledgedItem(String finishedId) {
+        LinkItem active = activeItem;
+        // A newly shared link may already have replaced the finished one.
+        if (active == null || !active.id.equals(finishedId)) return;
         stopBluetoothTransport();
         activeItem = null;
-        int remaining = outbox.count();
+        LinkItem next = outbox.latest();
         updateOutboxStatus();
-        if (remaining == 0) {
+        if (next == null) {
             status.setText("Saved to the Supernote.");
             status.postDelayed(this::finishAndRemoveTask, 900);
         } else {
-            status.setText("Saved to the Supernote. Another link is still waiting.");
-            showLatestItem();
+            // Keep going: the Supernote receives every waiting link while it is open.
+            showItem(next);
+            startSending(next);
         }
     }
 
-    private void discardLatest() {
-        LinkItem latest = outbox.latest();
-        if (latest == null) {
+    private void discardShown() {
+        LinkItem active = activeItem;
+        LinkItem shown = active != null ? active : outbox.latest();
+        if (shown == null) {
             status.setText("The outbox is already empty.");
             return;
         }
-        if (activeItem != null && latest.id.equals(activeItem.id)) stopBluetoothTransport();
-        if (!outbox.remove(latest.id)) {
+        if (active != null) stopBluetoothTransport();
+        if (!outbox.remove(shown.id)) {
             status.setText("Could not update the outbox.");
             return;
         }
@@ -439,7 +517,7 @@ public final class MainActivity extends Activity {
         updateOutboxStatus();
     }
 
-    private void stopBluetoothTransport() {
+    private void stopAdvertising() {
         if (advertiser != null && advertising) {
             try {
                 advertiser.stopAdvertising(advertiseCallback);
@@ -448,6 +526,10 @@ public final class MainActivity extends Activity {
         }
         advertising = false;
         advertiser = null;
+    }
+
+    private void stopBluetoothTransport() {
+        stopAdvertising();
         if (gattServer != null) {
             try {
                 gattServer.close();

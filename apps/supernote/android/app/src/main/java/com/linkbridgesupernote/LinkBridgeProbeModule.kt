@@ -1,7 +1,5 @@
 package com.linkbridgesupernote
 
-import android.Manifest
-import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothGatt
 import android.bluetooth.BluetoothGattCallback
@@ -13,8 +11,6 @@ import android.bluetooth.le.ScanFilter
 import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
 import android.content.Context
-import android.content.pm.PackageManager
-import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.ParcelUuid
@@ -32,21 +28,7 @@ class LinkBridgeProbeModule(
     private val reactContext: ReactApplicationContext
 ) : ReactContextBaseJavaModule(reactContext) {
 
-  private data class DeviceResult(
-      val address: String,
-      val name: String?,
-      val rssi: Int,
-      val serviceUuids: List<String>
-  )
-
   private val mainHandler = Handler(Looper.getMainLooper())
-  private val scanResults = linkedMapOf<String, DeviceResult>()
-  private var activeCallback: ScanCallback? = null
-  private var activePromise: Promise? = null
-  private var activeScanner: android.bluetooth.le.BluetoothLeScanner? = null
-  private var requestedServiceUuid: String? = null
-  private var scanStartedAt: Long = 0L
-  private var scanTimeout: Runnable? = null
 
   private var receivePromise: Promise? = null
   private var receiveScanner: android.bluetooth.le.BluetoothLeScanner? = null
@@ -68,135 +50,12 @@ class LinkBridgeProbeModule(
   private var receivedItemId: String? = null
   private var receivedTitle: String = ""
   private var receivedCreatedAt: Long = 0L
+  private var receivedUrlBytes: Int = -1
+  private var receivedRemaining: Int = 0
+  private var urlMtuRetryPending = false
+  private var urlMtuRetried = false
 
   override fun getName(): String = "LinkBridgeProbe"
-
-  @ReactMethod
-  fun getCapabilities(promise: Promise) {
-    try {
-      val packageManager = reactContext.packageManager
-      val bluetoothManager =
-          reactContext.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
-      val adapter = bluetoothManager?.adapter
-      val result = Arguments.createMap()
-
-      result.putInt("sdkInt", Build.VERSION.SDK_INT)
-      result.putString("androidRelease", Build.VERSION.RELEASE)
-      result.putString("runtimePackage", reactContext.packageName)
-      result.putInt("targetSdk", reactContext.applicationInfo.targetSdkVersion)
-      result.putBoolean(
-          "bleFeaturePresent",
-          packageManager.hasSystemFeature(PackageManager.FEATURE_BLUETOOTH_LE))
-      result.putBoolean("adapterPresent", adapter != null)
-      result.putBoolean("adapterEnabled", adapter?.isEnabled == true)
-      result.putBoolean("scannerAvailable", adapter?.bluetoothLeScanner != null)
-      result.putBoolean(
-          "multipleAdvertisementSupported",
-          adapter?.isMultipleAdvertisementSupported == true)
-
-      val permissions = Arguments.createMap()
-      permissionState(Manifest.permission.BLUETOOTH, permissions)
-      permissionState(Manifest.permission.BLUETOOTH_ADMIN, permissions)
-      permissionState(Manifest.permission.ACCESS_FINE_LOCATION, permissions)
-      permissionState(Manifest.permission.ACCESS_COARSE_LOCATION, permissions)
-      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-        permissionState(Manifest.permission.BLUETOOTH_SCAN, permissions)
-        permissionState(Manifest.permission.BLUETOOTH_CONNECT, permissions)
-      }
-      result.putMap("permissions", permissions)
-
-      val bondedCount = try {
-        adapter?.bondedDevices?.size ?: 0
-      } catch (_: SecurityException) {
-        -1
-      }
-      result.putInt("bondedDeviceCount", bondedCount)
-      promise.resolve(result)
-    } catch (error: Throwable) {
-      promise.reject("capability_check_failed", error.message, error)
-    }
-  }
-
-  @ReactMethod
-  fun startScan(serviceUuid: String, timeoutMs: Double, promise: Promise) {
-    if (activePromise != null || receivePromise != null || receiveGatt != null) {
-      promise.reject("scan_in_progress", "A BLE scan is already running")
-      return
-    }
-
-    val parsedUuid = try {
-      ParcelUuid(UUID.fromString(serviceUuid))
-    } catch (error: IllegalArgumentException) {
-      promise.reject("invalid_service_uuid", "Invalid service UUID: $serviceUuid", error)
-      return
-    }
-
-    val bluetoothManager =
-        reactContext.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
-    val adapter = bluetoothManager?.adapter
-    if (adapter == null) {
-      promise.reject("bluetooth_unavailable", "This device has no Bluetooth adapter")
-      return
-    }
-    if (!adapter.isEnabled) {
-      promise.reject("bluetooth_disabled", "Bluetooth is turned off on the Supernote")
-      return
-    }
-
-    val scanner = adapter.bluetoothLeScanner
-    if (scanner == null) {
-      promise.reject("scanner_unavailable", "The BLE scanner is unavailable")
-      return
-    }
-
-    val boundedTimeout = timeoutMs.toLong().coerceIn(1_000L, 30_000L)
-    scanResults.clear()
-    activePromise = promise
-    activeScanner = scanner
-    requestedServiceUuid = parsedUuid.uuid.toString()
-    scanStartedAt = System.currentTimeMillis()
-
-    val callback = object : ScanCallback() {
-      override fun onScanResult(callbackType: Int, result: ScanResult) {
-        recordResult(result)
-      }
-
-      override fun onBatchScanResults(results: MutableList<ScanResult>) {
-        results.forEach(::recordResult)
-      }
-
-      override fun onScanFailed(errorCode: Int) {
-        finishScan("scan_failed_$errorCode", "Android BLE scan failed with code $errorCode")
-      }
-    }
-    activeCallback = callback
-
-    try {
-      val filter = ScanFilter.Builder().setServiceUuid(parsedUuid).build()
-      val settings =
-          ScanSettings.Builder()
-              .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
-              .build()
-      scanner.startScan(listOf(filter), settings, callback)
-      val timeout = Runnable { finishScan() }
-      scanTimeout = timeout
-      mainHandler.postDelayed(timeout, boundedTimeout)
-    } catch (error: SecurityException) {
-      finishScan("scan_permission_denied", error.message ?: "BLE scan permission denied")
-    } catch (error: Throwable) {
-      finishScan("scan_start_failed", error.message ?: "Unable to start BLE scan")
-    }
-  }
-
-  @ReactMethod
-  fun stopScan(promise: Promise) {
-    if (activePromise == null) {
-      promise.resolve(false)
-      return
-    }
-    finishScan()
-    promise.resolve(true)
-  }
 
   @ReactMethod
   fun receiveItem(
@@ -207,7 +66,7 @@ class LinkBridgeProbeModule(
       timeoutMs: Double,
       promise: Promise
   ) {
-    if (activePromise != null || receivePromise != null || receiveGatt != null) {
+    if (receivePromise != null || receiveGatt != null) {
       promise.reject("bluetooth_busy", "A LinkBridge Bluetooth operation is already running")
       return
     }
@@ -271,6 +130,10 @@ class LinkBridgeProbeModule(
     receivedItemId = null
     receivedTitle = ""
     receivedCreatedAt = 0L
+    receivedUrlBytes = -1
+    receivedRemaining = 0
+    urlMtuRetryPending = false
+    urlMtuRetried = false
 
     val callback = object : ScanCallback() {
       override fun onScanResult(callbackType: Int, result: ScanResult) {
@@ -428,29 +291,6 @@ class LinkBridgeProbeModule(
     return result
   }
 
-  private fun permissionState(permission: String, target: com.facebook.react.bridge.WritableMap) {
-    val shortName = permission.substringAfterLast('.')
-    target.putBoolean(
-        shortName,
-        reactContext.checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED)
-  }
-
-  private fun recordResult(result: ScanResult) {
-    val address = try {
-      result.device.address ?: "unknown"
-    } catch (_: SecurityException) {
-      "permission-denied"
-    }
-    val name = try {
-      result.device.name ?: result.scanRecord?.deviceName
-    } catch (_: SecurityException) {
-      result.scanRecord?.deviceName
-    }
-    val services =
-        result.scanRecord?.serviceUuids?.map { it.uuid.toString() } ?: emptyList()
-    scanResults[address] = DeviceResult(address, name, result.rssi, services)
-  }
-
   @Synchronized
   private fun connectToPhone(result: ScanResult) {
     if (receivePromise == null || receiveGatt != null) return
@@ -475,37 +315,15 @@ class LinkBridgeProbeModule(
 
   private val receiveGattCallback = object : BluetoothGattCallback() {
     override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
-      if (status != BluetoothGatt.GATT_SUCCESS) {
-        finishReceive("gatt_connection_error", "Bluetooth connection failed with status $status")
-        return
-      }
-      if (newState == BluetoothProfile.STATE_CONNECTED) {
-        try {
-          gatt.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_HIGH)
-          if (!gatt.requestMtu(517)) discoverServices(gatt)
-          // Android permits only one queued GATT operation. The Nomad can take
-          // roughly two seconds to negotiate MTU, so service discovery normally
-          // starts from onMtuChanged. This is only a lost-callback fallback.
-          mainHandler.postDelayed({ discoverServices(gatt) }, 5_000L)
-        } catch (error: Throwable) {
-          finishReceive("gatt_setup_failed", error.message ?: "Could not prepare the connection")
-        }
-      } else if (newState == BluetoothProfile.STATE_DISCONNECTED && gatt === receiveGatt) {
-        if (receivePromise != null) {
-          finishReceive("gatt_disconnected", "The phone disconnected before sending the link")
-        } else {
-          val pendingAck = receiveAckPromise
-          receiveAckPromise = null
-          closeReceiveSession()
-          pendingAck?.reject(
-              "ack_disconnected", "The phone disconnected before confirming the saved link")
-        }
-      }
+      handleConnectionState(gatt, status, newState)
     }
 
     override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
       if (status == BluetoothGatt.GATT_SUCCESS) receiveMtu = mtu
-      discoverServices(gatt)
+      if (gatt === receiveGatt && urlMtuRetryPending) {
+        urlMtuRetryPending = false
+        readUrl(gatt)
+      }
     }
 
     override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
@@ -540,16 +358,9 @@ class LinkBridgeProbeModule(
       when (characteristic.uuid) {
         receiveMetadataCharacteristicUuid -> {
           if (!acceptReceivedMetadata(characteristic.value)) return
-          val urlCharacteristic =
-              receiveServiceUuid?.let(gatt::getService)
-                  ?.getCharacteristic(receiveUrlCharacteristicUuid)
-          if (urlCharacteristic == null) {
-            finishReceive("url_characteristic_missing", "The phone did not expose the link URL")
-          } else if (!gatt.readCharacteristic(urlCharacteristic)) {
-            finishReceive("url_read_failed", "Could not request the URL from the phone")
-          }
+          readUrl(gatt)
         }
-        receiveUrlCharacteristicUuid -> acceptReceivedUrl(characteristic.value)
+        receiveUrlCharacteristicUuid -> acceptReceivedUrl(gatt, characteristic.value)
         else -> finishReceive("unexpected_characteristic", "The phone returned an unexpected value")
       }
     }
@@ -573,6 +384,29 @@ class LinkBridgeProbeModule(
     }
   }
 
+  // Synchronized so a fast callback waits until connectToPhone has stored the
+  // new connection.
+  @Synchronized
+  private fun handleConnectionState(gatt: BluetoothGatt, status: Int, newState: Int) {
+    if (gatt !== receiveGatt) return
+    if (status != BluetoothGatt.GATT_SUCCESS || newState == BluetoothProfile.STATE_DISCONNECTED) {
+      handleDisconnect(status)
+      return
+    }
+    if (newState == BluetoothProfile.STATE_CONNECTED) {
+      try {
+        gatt.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_HIGH)
+        // Start reading right away. Negotiating a larger MTU took about two
+        // seconds on the Nomad, longer than reading a typical short URL and
+        // title in default-size chunks. A larger MTU is requested only if a
+        // read comes back shorter than the phone says it should be.
+        discoverServices(gatt)
+      } catch (error: Throwable) {
+        finishReceive("gatt_setup_failed", error.message ?: "Could not prepare the connection")
+      }
+    }
+  }
+
   @Synchronized
   private fun discoverServices(gatt: BluetoothGatt) {
     if (receivePromise == null || receiveDiscoveryStarted || gatt !== receiveGatt) return
@@ -584,6 +418,35 @@ class LinkBridgeProbeModule(
     } catch (error: Throwable) {
       finishReceive("service_discovery_failed", error.message ?: "Could not discover services")
     }
+  }
+
+  private fun readUrl(gatt: BluetoothGatt) {
+    val urlCharacteristic =
+        receiveServiceUuid?.let(gatt::getService)?.getCharacteristic(receiveUrlCharacteristicUuid)
+    if (urlCharacteristic == null) {
+      finishReceive("url_characteristic_missing", "The phone did not expose the link URL")
+    } else if (!gatt.readCharacteristic(urlCharacteristic)) {
+      finishReceive("url_read_failed", "Could not request the URL from the phone")
+    }
+  }
+
+  @Synchronized
+  private fun handleDisconnect(status: Int) {
+    if (receivePromise != null) {
+      if (status == BluetoothGatt.GATT_SUCCESS) {
+        finishReceive("gatt_disconnected", "The phone disconnected before sending the link")
+      } else {
+        finishReceive("gatt_connection_error", "Bluetooth connection failed with status $status")
+      }
+      return
+    }
+    // The link was already handed to the note. Fail a pending save
+    // confirmation now rather than after the acknowledgement timeout.
+    val pendingAck = receiveAckPromise
+    receiveAckPromise = null
+    closeReceiveSession()
+    pendingAck?.reject(
+        "ack_disconnected", "The phone disconnected before confirming the saved link")
   }
 
   private fun acceptReceivedMetadata(bytes: ByteArray?): Boolean {
@@ -602,6 +465,9 @@ class LinkBridgeProbeModule(
       receivedItemId = itemId
       receivedTitle = metadata.optString("title").replace(Regex("\\s+"), " ").trim()
       receivedCreatedAt = metadata.optLong("createdAt", 0L)
+      // Optional fields from newer phone builds; older builds omit them.
+      receivedUrlBytes = metadata.optInt("urlBytes", -1)
+      receivedRemaining = metadata.optInt("remaining", 0).coerceAtLeast(0)
       return true
     } catch (error: Throwable) {
       finishReceive("invalid_metadata", "The phone sent malformed LinkBridge metadata")
@@ -609,7 +475,23 @@ class LinkBridgeProbeModule(
     }
   }
 
-  private fun acceptReceivedUrl(bytes: ByteArray?) {
+  private fun acceptReceivedUrl(gatt: BluetoothGatt, bytes: ByteArray?) {
+    val byteCount = bytes?.size ?: 0
+    if (receivedUrlBytes >= 0 && byteCount != receivedUrlBytes) {
+      // A shorter read than announced means the URL was truncated. Retry once
+      // with a larger MTU before giving up.
+      if (!urlMtuRetried) {
+        urlMtuRetried = true
+        urlMtuRetryPending = true
+        if (!gatt.requestMtu(517)) {
+          urlMtuRetryPending = false
+          readUrl(gatt)
+        }
+        return
+      }
+      finishReceive("url_truncated", "The phone's link arrived incomplete. Try again.")
+      return
+    }
     val url = bytes?.toString(StandardCharsets.UTF_8)?.trim().orEmpty()
     if (!(url.startsWith("https://") || url.startsWith("http://"))) {
       finishReceive("invalid_url", "The phone returned text that is not an HTTP URL")
@@ -654,6 +536,7 @@ class LinkBridgeProbeModule(
     response.putString("deviceAddress", receiveDeviceAddress)
     response.putInt("rssi", receiveRssi)
     response.putInt("mtu", receiveMtu)
+    response.putInt("remaining", receivedRemaining)
     response.putDouble("durationMs", (System.currentTimeMillis() - receiveStartedAt).toDouble())
     promise.resolve(response)
   }
@@ -697,46 +580,9 @@ class LinkBridgeProbeModule(
     receivedItemId = null
     receivedTitle = ""
     receivedCreatedAt = 0L
-  }
-
-  @Synchronized
-  private fun finishScan(errorCode: String? = null, errorMessage: String? = null) {
-    val promise = activePromise ?: return
-    val callback = activeCallback
-    try {
-      if (callback != null) {
-        activeScanner?.stopScan(callback)
-      }
-    } catch (_: SecurityException) {
-      // Report the original outcome; a permission error while stopping is non-fatal.
-    }
-
-    activePromise = null
-    activeCallback = null
-    activeScanner = null
-    scanTimeout?.let(mainHandler::removeCallbacks)
-    scanTimeout = null
-
-    if (errorCode != null) {
-      promise.reject(errorCode, errorMessage)
-      return
-    }
-
-    val response = Arguments.createMap()
-    response.putString("requestedServiceUuid", requestedServiceUuid)
-    response.putDouble("durationMs", (System.currentTimeMillis() - scanStartedAt).toDouble())
-    val devices = Arguments.createArray()
-    scanResults.values.forEach { device ->
-      val item = Arguments.createMap()
-      item.putString("address", device.address)
-      item.putString("name", device.name)
-      item.putInt("rssi", device.rssi)
-      val serviceArray = Arguments.createArray()
-      device.serviceUuids.forEach(serviceArray::pushString)
-      item.putArray("serviceUuids", serviceArray)
-      devices.pushMap(item)
-    }
-    response.putArray("devices", devices)
-    promise.resolve(response)
+    receivedUrlBytes = -1
+    receivedRemaining = 0
+    urlMtuRetryPending = false
+    urlMtuRetried = false
   }
 }

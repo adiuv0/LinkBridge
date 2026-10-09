@@ -45,7 +45,7 @@ Do not distribute an Android debug APK. Public phone builds must be created with
 
 - URLs are limited to 500 UTF-8 bytes.
 - The BLE service is intentionally short-lived but does not yet authenticate a paired phone.
-- The phone outbox keeps up to 100 items, but the current Supernote action receives one item at a time.
+- The phone outbox holds up to 100 links and refuses new ones when full rather than dropping old ones. One opening of the Supernote action receives every waiting link, up to 25.
 - LinkBridge refuses to insert only when it cannot find a clear area large enough for the actual rendered link.
 - Partner-app synchronization was not modified; LinkBridge relies on the user's existing sync workflow.
 - The Obsidian changes are installed locally and are not yet an upstream release of the community plugin.

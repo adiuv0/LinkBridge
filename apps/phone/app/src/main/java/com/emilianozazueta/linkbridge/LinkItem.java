@@ -54,14 +54,19 @@ final class LinkItem {
             json.optLong("createdAt", 0L));
     }
 
-    String metadataJson() throws JSONException {
+    String metadataJson(int remaining) throws JSONException {
         String candidateTitle = title;
+        int urlBytes = url.getBytes(StandardCharsets.UTF_8).length;
         while (true) {
+            // "urlBytes" lets the receiver detect a truncated URL read, and
+            // "remaining" tells it how many more links are queued after this one.
             String encoded = new JSONObject()
                 .put("v", PROTOCOL_VERSION)
                 .put("id", id)
                 .put("title", candidateTitle)
                 .put("createdAt", createdAt)
+                .put("urlBytes", urlBytes)
+                .put("remaining", Math.max(0, remaining))
                 .toString();
             if (encoded.getBytes(StandardCharsets.UTF_8).length <= MAX_METADATA_BYTES) {
                 return encoded;

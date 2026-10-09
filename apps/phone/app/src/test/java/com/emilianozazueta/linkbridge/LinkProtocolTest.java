@@ -44,13 +44,40 @@ public final class LinkProtocolTest {
             title.toString(),
             1234L);
 
-        String metadata = item.metadataJson();
+        String metadata = item.metadataJson(3);
         JSONObject parsed = new JSONObject(metadata);
 
         assertTrue(metadata.getBytes(StandardCharsets.UTF_8).length <= LinkItem.MAX_METADATA_BYTES);
         assertEquals(LinkItem.PROTOCOL_VERSION, parsed.getInt("v"));
         assertEquals(item.id, parsed.getString("id"));
+        assertEquals(item.url.getBytes(StandardCharsets.UTF_8).length, parsed.getInt("urlBytes"));
+        assertEquals(3, parsed.getInt("remaining"));
         assertFalse(metadata.contains(item.url));
+    }
+
+    @Test
+    public void fullOutboxRefusesNewLinksInsteadOfDroppingOldOnes() {
+        LinkOutbox outbox = new LinkOutbox(new MemoryStore());
+        LinkItem first = LinkItem.create("https://example.com/0", "first");
+        assertTrue(outbox.enqueue(first));
+        for (int i = 1; i < LinkOutbox.MAX_ITEMS; i++) {
+            assertTrue(outbox.enqueue(LinkItem.create("https://example.com/" + i, "t")));
+        }
+
+        assertTrue(outbox.isFull());
+        assertFalse(outbox.enqueue(LinkItem.create("https://example.com/overflow", "t")));
+        assertEquals(LinkOutbox.MAX_ITEMS, outbox.count());
+        assertEquals(first.url, outbox.find(first.id).url);
+    }
+
+    @Test
+    public void emptyStoredOutboxStillAcceptsItems() {
+        MemoryStore store = new MemoryStore();
+        store.value = "";
+        LinkOutbox outbox = new LinkOutbox(store);
+
+        assertTrue(outbox.enqueue(LinkItem.create("https://example.com", "Example")));
+        assertEquals(1, outbox.count());
     }
 
     @Test
@@ -62,5 +89,21 @@ public final class LinkProtocolTest {
 
         assertEquals(1, decoded.size());
         assertEquals("good", decoded.get(0).id);
+    }
+
+    /** In-memory outbox storage for plain JVM tests. */
+    private static final class MemoryStore implements LinkOutbox.Store {
+        String value = "[]";
+
+        @Override
+        public String read() {
+            return value;
+        }
+
+        @Override
+        public boolean write(String encoded) {
+            value = encoded;
+            return true;
+        }
     }
 }
